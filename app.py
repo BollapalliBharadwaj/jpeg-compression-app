@@ -38,8 +38,9 @@ def idct2(block):
 # -------- PROCESS --------
 if uploaded_file is not None:
 
-    file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    file_bytes = uploaded_file.read()
+    np_bytes = np.asarray(bytearray(file_bytes), dtype=np.uint8)
+    img = cv2.imdecode(np_bytes, cv2.IMREAD_COLOR)
 
     col1, col2 = st.columns(2)
 
@@ -101,12 +102,14 @@ if uploaded_file is not None:
 
     st.metric("Compression Ratio", f"{cr:.2f}")
 
-    # -------- SIZE --------
-    original_size = original.nbytes
-    compressed_size = comp_nonzero
+    # -------- REAL FILE SIZE --------
+    original_size = len(file_bytes)
 
-    st.write(f"📦 Original Size: {original_size/1024:.2f} KB")
-    st.write(f"📦 Compressed Size (approx): {compressed_size/1024:.2f} KB")
+    _, buffer = cv2.imencode('.jpg', reconstructed)
+    compressed_size = len(buffer)
+
+    st.write(f"📦 Original File Size: {original_size/1024:.2f} KB")
+    st.write(f"📦 Compressed File Size: {compressed_size/1024:.2f} KB")
 
     # -------- DIFFERENCE HEATMAP --------
     diff = cv2.absdiff(original, reconstructed)
@@ -118,7 +121,6 @@ if uploaded_file is not None:
     st.pyplot(plt)
 
     # -------- DOWNLOAD --------
-    _, buffer = cv2.imencode('.jpg', reconstructed)
     st.download_button(
         "📥 Download Compressed Image",
         buffer.tobytes(),
