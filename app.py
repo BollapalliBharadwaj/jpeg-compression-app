@@ -2,12 +2,12 @@ import streamlit as st
 import cv2
 import numpy as np
 from scipy.fftpack import dct, idct
-import heapq
-import collections
+import matplotlib.pyplot as plt
+import pandas as pd
 
-st.set_page_config(page_title="DCT + Huffman Compression", layout="wide")
+st.set_page_config(page_title="JPEG Compression", layout="wide")
 
-st.title("📸 Image Compression using DCT + Huffman Coding")
+st.title("📸 JPEG Image Compression using DCT (Color)")
 
 # -------- QUALITY SLIDER --------
 quality = st.slider("🎚 Compression Quality", 10, 100, 50)
@@ -15,47 +15,7 @@ quality = st.slider("🎚 Compression Quality", 10, 100, 50)
 # -------- UPLOAD --------
 uploaded_file = st.file_uploader("📤 Upload Image", type=["jpg","png","jpeg"])
 
-# -------- HUFFMAN CODING --------
-class Node:
-    def __init__(self, freq, symbol=None, left=None, right=None):
-        self.freq = freq
-        self.symbol = symbol
-        self.left = left
-        self.right = right
-
-    def __lt__(self, other):
-        return self.freq < other.freq
-
-def build_huffman(data):
-    freq = collections.Counter(data)
-    heap = [Node(freq[s], s) for s in freq]
-    heapq.heapify(heap)
-
-    while len(heap) > 1:
-        n1 = heapq.heappop(heap)
-        n2 = heapq.heappop(heap)
-        merged = Node(n1.freq + n2.freq, None, n1, n2)
-        heapq.heappush(heap, merged)
-
-    return heap[0]
-
-def generate_codes(node, prefix="", codebook={}):
-    if node is None:
-        return
-    if node.symbol is not None:
-        codebook[node.symbol] = prefix
-    generate_codes(node.left, prefix + "0", codebook)
-    generate_codes(node.right, prefix + "1", codebook)
-    return codebook
-
-def huffman_size(data):
-    flat = data.flatten().astype(int)
-    tree = build_huffman(flat)
-    codes = generate_codes(tree)
-    total_bits = sum(len(codes[val]) for val in flat)
-    return total_bits / 8  # bytes
-
-# -------- JPEG MATRIX --------
+# JPEG Quantization Matrix
 Q = np.array([
     [16,11,10,16,24,40,51,61],
     [12,12,14,19,26,58,60,55],
@@ -83,7 +43,8 @@ if uploaded_file is not None:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.image(img, channels="BGR", caption="Original Image")
+        st.subheader("🖼 Original Image")
+        st.image(img, channels="BGR", width=500)
 
     img = np.float32(img)
 
@@ -93,9 +54,7 @@ if uploaded_file is not None:
 
     b, g, r = cv2.split(img)
 
-    Q_scaled = Q * (100 / quality)
-
-    def compress(channel):
+    def compress_channel(channel, Q_scaled):
         comp = np.zeros_like(channel)
         for i in range(0, h, 8):
             for j in range(0, w, 8):
@@ -104,7 +63,7 @@ if uploaded_file is not None:
                 comp[i:i+8, j:j+8] = np.round(dct_block / Q_scaled)
         return comp
 
-    def decompress(channel):
+    def decompress_channel(channel, Q_scaled):
         rec = np.zeros_like(channel)
         for i in range(0, h, 8):
             for j in range(0, w, 8):
@@ -113,54 +72,103 @@ if uploaded_file is not None:
                 rec[i:i+8, j:j+8] = idct_block
         return rec
 
-    # Compress
-    b_c, g_c, r_c = compress(b), compress(g), compress(r)
+    # -------- CURRENT QUALITY --------
+    Q_scaled = Q * (100 / quality)
 
-    # Huffman Size
-    huff_size = (
-        huffman_size(b_c) +
-        huffman_size(g_c) +
-        huffman_size(r_c)
-    )
+    b_c = compress_channel(b, Q_scaled)
+    g_c = compress_channel(g, Q_scaled)
+    r_c = compress_channel(r, Q_scaled)
 
-    # Reconstruct
-    b_r, g_r, r_r = decompress(b_c), decompress(g_c), decompress(r_c)
+    b_r = decompress_channel(b_c, Q_scaled)
+    g_r = decompress_channel(g_c, Q_scaled)
+    r_r = decompress_channel(r_c, Q_scaled)
+
     reconstructed = cv2.merge([b_r, g_r, r_r])
     reconstructed = np.clip(reconstructed, 0, 255).astype(np.uint8)
 
     with col2:
-        st.image(reconstructed, channels="BGR", caption="Compressed Image")
+        st.subheader("🗜 Compressed Image")
+        st.image(reconstructed, channels="BGR", width=500)
 
-    # -------- METRICS --------
     original = img.astype(np.uint8)
 
+    # -------- METRICS --------
     mse = np.mean((original - reconstructed) ** 2)
-    psnr = 10 * np.log10((255**2) / mse)
+    psnr = 100 if mse == 0 else 10 * np.log10((255**2) / mse)
     mae = np.mean(np.abs(original - reconstructed))
 
-    st.subheader("📊 Metrics")
-    st.write(f"MSE: {mse:.2f}")
-    st.write(f"PSNR: {psnr:.2f} dB")
-    st.write(f"MAE: {mae:.2f}")
+    comp_nonzero = np.count_nonzero(b_c) + np.count_nonzero(g_c) + np.count_nonzero(r_c)
+    cr = original.size / comp_nonzero
 
-    # -------- SIZE --------
+    col1, col2, col3 = st.columns(3)
+    col1.metric("MSE", f"{mse:.2f}")
+    col2.metric("PSNR", f"{psnr:.2f} dB")
+    col3.metric("MAE", f"{mae:.2f}")
+
+    st.metric("Compression Ratio", f"{cr:.2f}")
+
+    # -------- REAL FILE SIZE --------
     original_size = len(file_bytes)
-    compressed_size = huff_size
+    _, buffer = cv2.imencode('.jpg', reconstructed)
+    compressed_size = len(buffer)
 
-    st.subheader("📦 Size Comparison")
-    st.write(f"Original Size: {original_size/1024:.2f} KB")
-    st.write(f"Compressed Size (Huffman): {compressed_size/1024:.2f} KB")
+    st.write(f"📦 Original File Size: {original_size/1024:.2f} KB")
+    st.write(f"📦 Compressed File Size: {compressed_size/1024:.2f} KB")
 
-    # -------- INSIGHT --------
+    # -------- DIFFERENCE HEATMAP --------
+    diff = cv2.absdiff(original, reconstructed)
+    diff = cv2.normalize(diff, None, 0, 255, cv2.NORM_MINMAX)
+
+    st.subheader("🔍 Difference Heatmap")
+    plt.imshow(diff)
+    plt.colorbar()
+    st.pyplot(plt)
+
+    # -------- COMPARISON EXPERIMENT --------
+    st.subheader("📊 Compression Analysis (Multiple Quality Levels)")
+
+    qualities = [10, 30, 50, 80]
+    results = []
+
+    for q in qualities:
+        Q_s = Q * (100 / q)
+
+        b_c = compress_channel(b, Q_s)
+        g_c = compress_channel(g, Q_s)
+        r_c = compress_channel(r, Q_s)
+
+        b_r = decompress_channel(b_c, Q_s)
+        g_r = decompress_channel(g_c, Q_s)
+        r_r = decompress_channel(r_c, Q_s)
+
+        rec = cv2.merge([b_r, g_r, r_r])
+        rec = np.clip(rec, 0, 255).astype(np.uint8)
+
+        mse_val = np.mean((original - rec) ** 2)
+        psnr_val = 10 * np.log10((255**2) / mse_val)
+
+        comp_val = np.count_nonzero(b_c) + np.count_nonzero(g_c) + np.count_nonzero(r_c)
+        cr_val = original.size / comp_val
+
+        results.append([q, round(psnr_val,2), round(cr_val,2)])
+
+    df = pd.DataFrame(results, columns=["Quality", "PSNR (dB)", "Compression Ratio"])
+    st.table(df)
+
+    # -------- KEY OBSERVATION --------
+    st.subheader("🧠 Key Observation")
+
     st.info("""
-    Huffman coding reduces size by encoding repeated values efficiently.
-    It works best on images with high redundancy like PNG.
+    JPEG images are already compressed using DCT and quantization.
+    Re-compressing them may not reduce file size and can even increase it.
+    
+    In contrast, PNG images (lossless) contain redundancy,
+    making them more suitable for further compression.
     """)
 
     # -------- DOWNLOAD --------
-    _, buffer = cv2.imencode('.jpg', reconstructed)
     st.download_button(
-        "📥 Download Image",
+        "📥 Download Compressed Image",
         buffer.tobytes(),
         "compressed.jpg"
     )
