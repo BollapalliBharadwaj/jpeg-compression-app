@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from scipy.fftpack import dct, idct
 import matplotlib.pyplot as plt
+import pandas as pd
 
 st.set_page_config(page_title="JPEG Compression", layout="wide")
 
@@ -25,9 +26,6 @@ Q = np.array([
     [49,64,78,87,103,121,120,101],
     [72,92,95,98,112,100,103,99]
 ])
-
-# Scale matrix using quality
-Q_scaled = Q * (100 / quality)
 
 def dct2(block):
     return dct(dct(block.T, norm='ortho').T, norm='ortho')
@@ -56,7 +54,7 @@ if uploaded_file is not None:
 
     b, g, r = cv2.split(img)
 
-    def compress(channel):
+    def compress_channel(channel, Q_scaled):
         comp = np.zeros_like(channel)
         for i in range(0, h, 8):
             for j in range(0, w, 8):
@@ -65,7 +63,7 @@ if uploaded_file is not None:
                 comp[i:i+8, j:j+8] = np.round(dct_block / Q_scaled)
         return comp
 
-    def decompress(channel):
+    def decompress_channel(channel, Q_scaled):
         rec = np.zeros_like(channel)
         for i in range(0, h, 8):
             for j in range(0, w, 8):
@@ -74,9 +72,16 @@ if uploaded_file is not None:
                 rec[i:i+8, j:j+8] = idct_block
         return rec
 
-    # Compress & Decompress
-    b_c, g_c, r_c = compress(b), compress(g), compress(r)
-    b_r, g_r, r_r = decompress(b_c), decompress(g_c), decompress(r_c)
+    # -------- CURRENT QUALITY --------
+    Q_scaled = Q * (100 / quality)
+
+    b_c = compress_channel(b, Q_scaled)
+    g_c = compress_channel(g, Q_scaled)
+    r_c = compress_channel(r, Q_scaled)
+
+    b_r = decompress_channel(b_c, Q_scaled)
+    g_r = decompress_channel(g_c, Q_scaled)
+    r_r = decompress_channel(r_c, Q_scaled)
 
     reconstructed = cv2.merge([b_r, g_r, r_r])
     reconstructed = np.clip(reconstructed, 0, 255).astype(np.uint8)
@@ -104,7 +109,6 @@ if uploaded_file is not None:
 
     # -------- REAL FILE SIZE --------
     original_size = len(file_bytes)
-
     _, buffer = cv2.imencode('.jpg', reconstructed)
     compressed_size = len(buffer)
 
@@ -119,6 +123,48 @@ if uploaded_file is not None:
     plt.imshow(diff)
     plt.colorbar()
     st.pyplot(plt)
+
+    # -------- COMPARISON EXPERIMENT --------
+    st.subheader("📊 Compression Analysis (Multiple Quality Levels)")
+
+    qualities = [10, 30, 50, 80]
+    results = []
+
+    for q in qualities:
+        Q_s = Q * (100 / q)
+
+        b_c = compress_channel(b, Q_s)
+        g_c = compress_channel(g, Q_s)
+        r_c = compress_channel(r, Q_s)
+
+        b_r = decompress_channel(b_c, Q_s)
+        g_r = decompress_channel(g_c, Q_s)
+        r_r = decompress_channel(r_c, Q_s)
+
+        rec = cv2.merge([b_r, g_r, r_r])
+        rec = np.clip(rec, 0, 255).astype(np.uint8)
+
+        mse_val = np.mean((original - rec) ** 2)
+        psnr_val = 10 * np.log10((255**2) / mse_val)
+
+        comp_val = np.count_nonzero(b_c) + np.count_nonzero(g_c) + np.count_nonzero(r_c)
+        cr_val = original.size / comp_val
+
+        results.append([q, round(psnr_val,2), round(cr_val,2)])
+
+    df = pd.DataFrame(results, columns=["Quality", "PSNR (dB)", "Compression Ratio"])
+    st.table(df)
+
+    # -------- KEY OBSERVATION --------
+    st.subheader("🧠 Key Observation")
+
+    st.info("""
+    JPEG images are already compressed using DCT and quantization.
+    Re-compressing them may not reduce file size and can even increase it.
+    
+    In contrast, PNG images (lossless) contain redundancy,
+    making them more suitable for further compression.
+    """)
 
     # -------- DOWNLOAD --------
     st.download_button(
