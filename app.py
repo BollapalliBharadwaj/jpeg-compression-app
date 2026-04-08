@@ -7,7 +7,7 @@ import pandas as pd
 
 st.set_page_config(page_title="JPEG Compression", layout="wide")
 
-st.title("📸 JPEG Image Compression using DCT (Color)")
+st.title("📸 Image Compression using DCT (Color)")
 
 # -------- QUALITY SLIDER --------
 quality = st.slider("🎚 Compression Quality", 10, 100, 50)
